@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"embed"
 	b64 "encoding/base64"
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/png"
@@ -11,6 +12,7 @@ import (
 	"math/rand"
 	"path"
 	"strconv"
+	"strings"
 
 	"github.com/aimerneige/yukichan-bot/internal/pkg/common"
 	"github.com/disintegration/imaging"
@@ -20,6 +22,27 @@ import (
 )
 
 const DeckImgPath = "assets/deck"
+const maxDrawCount = 8
+
+//go:embed assets/deck/deck.json
+var deckMetadata []byte
+
+var cardNames = loadCardNames()
+
+func loadCardNames() map[string]string {
+	var decks map[string][]string
+	if err := json.Unmarshal(deckMetadata, &decks); err != nil {
+		panic(fmt.Errorf("tarot: invalid deck metadata: %w", err))
+	}
+	names := make(map[string]string)
+	for _, card := range decks["bilibili"] {
+		id, name, ok := strings.Cut(card, "_")
+		if ok {
+			names[id] = name
+		}
+	}
+	return names
+}
 
 //go:embed assets/deck
 var deckEmbedFS embed.FS
@@ -35,11 +58,11 @@ func init() {
 		SetPriority(7).
 		SetBlock(true).
 		Handle(func(ctx *zero.Ctx) {
-			helpText := message.Text("支持指令\n「运势预测」（单张牌预测运势）\n「塔罗占卜」（三张牌进行占卜）\n「抽塔罗牌 5」（抽取指定张数的塔罗牌）")
+			helpText := message.Text("支持指令\n「运势预测」或「今日运势」（随机抽取一张牌）\n「塔罗占卜」（过去、现在、未来三张牌）\n「抽塔罗牌 5」（抽取 1～8 张，不重复；省略张数默认 1 张）")
 			helpImage := message.Image("base64://" + b64.StdEncoding.EncodeToString(tarotCommandImg))
 			ctx.SendChain(helpText, helpImage)
 		})
-	engine.OnFullMatch("运势预测").
+	engine.OnFullMatchGroup([]string{"运势预测", "今日运势"}).
 		SetPriority(7).
 		SetBlock(true).
 		Handle(func(ctx *zero.Ctx) {
@@ -49,33 +72,45 @@ func init() {
 		SetPriority(7).
 		SetBlock(true).
 		Handle(func(ctx *zero.Ctx) {
-			ctx.Send(drawCard(3))
+			ctx.Send(drawCards(3, true))
 		})
 	engine.OnPrefix("抽塔罗牌").
 		SetPriority(7).
 		SetBlock(true).
 		Handle(func(ctx *zero.Ctx) {
-			args := ctx.State["args"].(string)
-			if args == "" {
-				return
-			}
-			count, err := strconv.ParseInt(args, 10, 64)
+			count, err := parseDrawCount(ctx.State["args"].(string))
 			if err != nil {
-				ctx.Send("牌数解析失败")
+				ctx.Send(err.Error())
 				return
 			}
-			if count <= 0 || count > 8 {
-				count = 1
-			}
-			ctx.Send(drawCard(int(count)))
+			ctx.Send(drawCard(count))
 		})
 
 	engine.UseMidHandler(common.DefaultSpeedLimit)
 }
 
+func parseDrawCount(args string) (int, error) {
+	args = strings.TrimSpace(args)
+	if args == "" {
+		return 1, nil
+	}
+	count, err := strconv.Atoi(args)
+	if err != nil || count < 1 || count > maxDrawCount {
+		return 0, fmt.Errorf("请输入 1～%d 之间的整数，例如「抽塔罗牌 3」。", maxDrawCount)
+	}
+	return count, nil
+}
+
 func drawCard(number int) message.Message {
+	return drawCards(number, false)
+}
+
+func drawCards(number int, spread bool) message.Message {
+	if number < 1 || number > maxDrawCount {
+		return message.Message{message.Text("抽牌数量须为 1～8 张。")}
+	}
 	theme := "classic"
-	if (rand.Int() % 3) == 0 {
+	if rand.Intn(3) == 0 {
 		theme = "bilibili"
 	}
 	deckPath := path.Join(DeckImgPath, theme)
@@ -86,40 +121,65 @@ func drawCard(number int) message.Message {
 	}
 	cardImagePaths := make([]string, 0, 78)
 	for _, card := range cardImages {
-		if !card.IsDir() {
+		if !card.IsDir() && strings.EqualFold(path.Ext(card.Name()), ".jpg") {
 			_imgPath := path.Join(deckPath, card.Name())
 			cardImagePaths = append(cardImagePaths, _imgPath)
 		}
 	}
+	if len(cardImagePaths) < number {
+		log.Errorln("[tarot]", "Not enough card images", deckPath)
+		return message.Message{message.Text("牌组素材不完整，暂时无法抽牌。")}
+	}
 	cardResult := randomDraw(cardImagePaths, number)
 	log.Debugln("[tarot]", fmt.Sprintf("cards: %v", cardResult))
-	imgs := make([]message.MessageSegment, number)
+	imgs := make(message.Message, 0, number*3)
 	for i, imgPath := range cardResult {
 		imgData, err := fs.ReadFile(deckEmbedFS, imgPath)
 		// 读取图片
 		if err != nil {
 			log.Errorln("[tarot]", "Fail to read card image", err)
-			imgs[i] = message.Text("[ERROR] 读取图片失败，请查阅后台日志。\n")
+			imgs = append(imgs, message.Text("读取第 "+strconv.Itoa(i+1)+" 张牌的图片失败，请稍后再试。\n"))
 			continue
 		}
 		// 翻转图片，实现正逆位
-		if (rand.Int() % 2) == 0 {
+		reversed := rand.Intn(2) == 0
+		if reversed {
 			flippedImageData, err := rotateImage(imgData)
 			if err != nil {
 				log.Errorln("[tarot]", "Fail to flip card image", err)
-				imgs[i] = message.Text("[ERROR] 翻转图片失败，请查阅后台日志。\n")
+				imgs = append(imgs, message.Text("生成第 "+strconv.Itoa(i+1)+" 张牌的图片失败，请稍后再试。\n"))
 				continue
 			} else {
 				imgData = flippedImageData
 			}
 		}
-		imgs[i] = message.Image("base64://" + b64.StdEncoding.EncodeToString(imgData))
+		name := cardNames[strings.SplitN(path.Base(imgPath), "_", 2)[0]]
+		if name == "" {
+			name = strings.TrimSuffix(path.Base(imgPath), path.Ext(imgPath))
+		}
+		position := fmt.Sprintf("第 %d 张", i+1)
+		if spread && number == 3 {
+			position = []string{"过去", "现在", "未来"}[i]
+		}
+		orientation := "正位"
+		if reversed {
+			orientation = "逆位"
+		}
+		imgs = append(imgs,
+			message.Text(fmt.Sprintf("%s：%s（%s）\n", position, name, orientation)),
+			message.Image("base64://"+b64.StdEncoding.EncodeToString(imgData)),
+			message.Text("\n"),
+		)
 	}
 	return imgs
 }
 
 // randomDraw 随机不放回抽取
 func randomDraw(s []string, k int) []string {
+	if k <= 0 {
+		return nil
+	}
+	s = append([]string(nil), s...)
 	n := len(s)
 	if k > n {
 		k = n
