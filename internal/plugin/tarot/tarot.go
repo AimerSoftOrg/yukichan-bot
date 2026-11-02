@@ -153,7 +153,8 @@ func drawCards(number int, spread bool) message.Message {
 				imgData = flippedImageData
 			}
 		}
-		name := cardNames[strings.SplitN(path.Base(imgPath), "_", 2)[0]]
+		id := strings.SplitN(path.Base(imgPath), "_", 2)[0]
+		name := cardNames[id]
 		if name == "" {
 			name = strings.TrimSuffix(path.Base(imgPath), path.Ext(imgPath))
 		}
@@ -168,7 +169,7 @@ func drawCards(number int, spread bool) message.Message {
 		imgs = append(imgs,
 			message.Text(fmt.Sprintf("%s：%s（%s）\n", position, name, orientation)),
 			message.Image("base64://"+b64.StdEncoding.EncodeToString(imgData)),
-			message.Text("\n"),
+			message.Text("\n牌义："+meaningText(id, reversed)+"\n"),
 		)
 	}
 	return imgs
