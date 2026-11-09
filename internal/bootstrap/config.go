@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/aimerneige/yukichan-bot/internal/config"
+	"github.com/aimerneige/yukichan-bot/internal/pkg/llm"
 	"gopkg.in/yaml.v3"
 )
 
@@ -16,6 +17,10 @@ func InitConfig(confPath string) {
 	}
 	if err := yaml.Unmarshal(confData, &config.Conf); err != nil {
 		fmt.Printf("Fail to unmarshal your config file. Please check your file in \"%s\".\nFatal Error, Exiting...\n", confPath)
+		os.Exit(1)
+	}
+	if err := llm.Configure(config.Conf.LLM); err != nil {
+		fmt.Printf("Fail to initialize LLM: %v\n", err)
 		os.Exit(1)
 	}
 }

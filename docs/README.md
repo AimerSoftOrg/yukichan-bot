@@ -79,6 +79,10 @@ make run
 
 如需通过 NapCat-Docker 登录 QQ 账号并使用 OneBot V11 接入本项目，请参考 [NapCat-Docker 启动指南](NAPCAT_DOCKER_GUIDE.md)。
 
+## 共享 LLM
+
+支持 DeepSeek、Gemini 和 ChatGPT，插件可通过统一接口调用。配置及调用方式见 [共享 LLM 服务](LLM.md)。
+
 ## 插件及用法
 
 <details>

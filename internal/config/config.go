@@ -1,5 +1,7 @@
 package config
 
+import "github.com/aimerneige/yukichan-bot/internal/pkg/llm"
+
 var Conf *Config
 
 type CommonConfig struct {
@@ -12,4 +14,5 @@ type CommonConfig struct {
 
 type Config struct {
 	Common CommonConfig `yaml:"common"`
+	LLM    llm.Config   `yaml:"llm"`
 }
